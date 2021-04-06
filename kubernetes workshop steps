@@ -1,0 +1,270 @@
+ref: https://docs.microsoft.com/en-US/learn/modules/aks-workshop
+
+1.
+az account set --subscription 91f0aabe-1902-4ac5-ab3d-3b94d1d9aee8
+
+2.
+REGION_NAME=westeurope
+RESOURCE_GROUP=aksworkshop
+SUBNET_NAME=aks-subnet
+VNET_NAME=aks-vnet
+
+3.
+az group create \
+    --name $RESOURCE_GROUP \
+    --location $REGION_NAME
+
+4.
+az network vnet create \
+    --resource-group $RESOURCE_GROUP \
+    --location $REGION_NAME \
+    --name $VNET_NAME \
+    --address-prefixes 10.0.0.0/8 \
+    --subnet-name $SUBNET_NAME \
+    --subnet-prefixes 10.240.0.0/16
+
+5.
+SUBNET_ID=$(az network vnet subnet show \
+    --resource-group $RESOURCE_GROUP \
+    --vnet-name $VNET_NAME \
+    --name $SUBNET_NAME \
+    --query id -o tsv)
+
+6.
+VERSION=$(az aks get-versions \
+    --location $REGION_NAME \
+    --query 'orchestrators[?!isPreview] | [-1].orchestratorVersion' \
+    --output tsv)
+
+7.
+AKS_CLUSTER_NAME=aksworkshop-$RANDOM
+
+8.
+az aks create \
+--resource-group $RESOURCE_GROUP \
+--name $AKS_CLUSTER_NAME \
+--vm-set-type VirtualMachineScaleSets \
+--node-count 2 \
+--load-balancer-sku standard \
+--location $REGION_NAME \
+--kubernetes-version $VERSION \
+--network-plugin azure \
+--vnet-subnet-id $SUBNET_ID \
+--service-cidr 10.2.0.0/24 \
+--dns-service-ip 10.2.0.10 \
+--docker-bridge-address 172.17.0.1/16 \
+--generate-ssh-keys
+
+9.
+az aks get-credentials \
+    --resource-group $RESOURCE_GROUP \
+    --name $AKS_CLUSTER_NAME
+
+10.
+kubectl get nodes
+kubectl get namespace
+
+11.
+kubectl create namespace ratingsapp
+
+12.
+ACR_NAME=acr$RANDOM
+
+13.
+az acr create \
+    --resource-group $RESOURCE_GROUP \
+    --location $REGION_NAME \
+    --name $ACR_NAME \
+    --sku Standard
+
+14.
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $ACR_NAME \
+    --image ratings-api:v1 .
+
+15.
+cd ../ 
+git clone https://github.com/MicrosoftDocs/mslearn-aks-workshop-ratings-web.git
+
+16.
+cd mslearn-aks-workshop-ratings-web
+
+17.
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $ACR_NAME \
+    --image ratings-web:v1 .
+
+18.
+az acr repository list \
+    --name $ACR_NAME \
+    --output table
+
+19.
+az aks update \
+    --name $AKS_CLUSTER_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --attach-acr $ACR_NAME
+
+20.
+helm repo add bitnami https://charts.bitnami.com/bitnami
+helm search repo bitnami
+
+21.
+helm install ratings bitnami/mongodb \
+    --namespace ratingsapp \
+    --set auth.username=ratingUser,auth.password=Azure2018,auth.database=ratingsdb
+
+22.
+kubectl create secret generic mongosecret \
+    --namespace ratingsapp \
+    --from-literal=MONGOCONNECTION="mongodb://ratingUser:Azure2018@ratings-mongodb.ratingsapp:27017/ratingsdb"
+
+22.
+cd ../
+kubectl apply \
+    --namespace ratingsapp \
+    -f ratings-api-deployment.yaml
+23.
+kubectl get pods \
+    --namespace ratingsapp \
+    -l app=ratings-api -w
+
+kubectl get deployment ratings-api --namespace ratingsapp
+
+24.
+kubectl apply \
+    --namespace ratingsapp \
+    -f ratings-api-service.yaml
+
+25.
+kubectl apply \
+--namespace ratingsapp \
+-f ratings-web-deployment.yaml
+
+kubectl get pods --namespace ratingsapp -l app=ratings-web -w
+kubectl get deployment ratings-web --namespace ratingsapp
+
+26.
+kubectl apply \
+    --namespace ratingsapp \
+    -f ratings-web-service.yaml
+
+27.
+kubectl get service ratings-web --namespace ratingsapp -w
+
+28.
+kubectl create namespace ingress
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
+
+29.
+helm install nginx-ingress ingress-nginx/ingress-nginx \
+    --namespace ingress \
+    --set controller.replicaCount=1 \
+    --set controller.nodeSelector."beta\.kubernetes\.io/os"=linux \
+    --set defaultBackend.nodeSelector."beta\.kubernetes\.io/os"=linux
+
+30.
+kubectl get services --namespace ingress -w
+
+31.
+kubectl delete \
+    --namespace ratingsapp \
+    -f ratings-web-service.yaml
+
+32.
+change ratings-web-service.yaml 
+ClusterIP
+
+33.
+kubectl apply \
+    --namespace ratingsapp \
+    -f ratings-web-service.yaml
+
+34.
+kubectl create namespace cert-manager
+helm repo add jetstack https://charts.jetstack.io
+helm repo update
+
+35.
+kubectl apply --validate=false -f https://raw.githubusercontent.com/jetstack/cert-manager/release-0.14/deploy/manifests/00-crds.yaml
+
+36.
+helm install product \
+    --namespace cert-manager \
+    --version v0.14.0 \
+    jetstack/cert-manager
+
+37.
+
+kubectl apply \
+    --namespace ratingsapp \
+    -f ratings-web-ingress-ssl.yaml
+
+38.
+kubectl describe cert ratings-web-cert --namespace ratingsapp
+
+39.
+WORKSPACE=aksworkshop-workspace-$RANDOM
+
+40.
+
+az resource create --resource-type Microsoft.OperationalInsights/workspaces \
+        --name $WORKSPACE \
+        --resource-group $RESOURCE_GROUP \
+        --location $REGION_NAME \
+        --properties '{}' -o table
+
+41.
+
+WORKSPACE_ID=$(az resource show --resource-type Microsoft.OperationalInsights/workspaces \
+    --resource-group $RESOURCE_GROUP \
+    --name $WORKSPACE \
+    --query "id" -o tsv)
+
+42.
+
+az aks enable-addons \
+    --resource-group $RESOURCE_GROUP \
+    --name $AKS_CLUSTER_NAME \
+    --addons monitoring \
+    --workspace-resource-id $WORKSPACE_ID
+
+43.
+go to aks insight
+
+44. hpa
+kubectl apply \
+    --namespace ratingsapp \
+    -f ratings-api-hpa.yaml
+
+45.
+LOADTEST_API_ENDPOINT=http://frontend.51.105.161.141.nip.io/api/loadtest
+
+az container create \
+    -g $RESOURCE_GROUP \
+    -n loadtest \
+    --cpu 4 \
+    --memory 1 \
+    --image azch/artillery \
+    --restart-policy Never \
+    --command-line "artillery quick -r 500 -d 300 $LOADTEST_API_ENDPOINT"
+
+46.
+kubectl get hpa \
+  --namespace ratingsapp -w
+
+47.
+az aks update \
+--resource-group $RESOURCE_GROUP \
+--name $AKS_CLUSTER_NAME  \
+--enable-cluster-autoscaler \
+--min-count 3 \
+--max-count 5
+
+kubectl get nodes -w
+
+49. finish
+
